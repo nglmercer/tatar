@@ -12,13 +12,13 @@
     "tauri-build": "tauri build"
   },
   "dependencies": {
-    "@tauri-apps/api": "^1.6.0",
-    "vue": "^3.5.22"
+    "@tauri-apps/api": "^2.1.0",
+    "vue": "^3.4.38"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^1.6.3",
-    "@vitejs/plugin-vue": "^5.0.4",
-    "vite": "^5.2.8"
+    "@tauri-apps/cli": "^2.1.0",
+    "@vitejs/plugin-vue": "^5.1.4",
+    "vite": "^5.4.8"
   },
   "pnpm": {
     "ignoredBuiltDependencies": [
