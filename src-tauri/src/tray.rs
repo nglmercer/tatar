@@ -4,12 +4,14 @@ use tauri::{
     AppHandle, Manager,
 };
 
-pub fn create_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+pub fn create_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     // Create menu items with IDs for proper event handling
     let show = MenuItem::with_id(app, "show", "Show", true, None::<String>)?;
     let hide = MenuItem::with_id(app, "hide", "Hide", true, None::<String>)?;
     let separator1 = PredefinedMenuItem::separator(app)?;
     let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<String>)?;
+    let adblock_status = MenuItem::with_id(app, "adblock_status", "AdBlock Status", true, None::<String>)?;
+    let update_adblock = MenuItem::with_id(app, "update_adblock", "Update AdBlock Filters", true, None::<String>)?;
     let about = MenuItem::with_id(app, "about", "About", true, None::<String>)?;
     let separator2 = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<String>)?;
@@ -21,6 +23,8 @@ pub fn create_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error
             &hide,
             &separator1,
             &settings,
+            &adblock_status,
+            &update_adblock,
             &about,
             &separator2,
             &quit,
@@ -100,6 +104,14 @@ pub fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
                     .build();
                 }
             }
+        }
+        "adblock_status" => {
+            let window = app.get_webview_window("main").unwrap();
+            let _ = window.eval("if (window.checkAdBlockStatus) { checkAdBlockStatus().then(status => { alert('AdBlock Status: ' + JSON.stringify(status, null, 2)); }); } else { alert('AdBlock status check not available'); }");
+        }
+        "update_adblock" => {
+            let window = app.get_webview_window("main").unwrap();
+            let _ = window.eval("if (window.updateAdBlockFilters) { updateAdBlockFilters().then(count => { if (count !== null) { alert('AdBlock filters updated: ' + count + ' filters'); } else { alert('Failed to update AdBlock filters'); } }); } else { alert('AdBlock update not available'); }");
         }
         "about" => {
             let window = app.get_webview_window("main").unwrap();

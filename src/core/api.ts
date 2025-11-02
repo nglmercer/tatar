@@ -40,8 +40,10 @@ export class TatarAPI {
     this.initAdBlocker();
   }
 
-  // Inicializar adblocker básico
+  // Inicializar adblocker básico (como respaldo al AdBlock principal)
   private initAdBlocker() {
+    console.log('🎵 Initializing Tatar API AdBlock as backup...');
+    
     // Lista de selectores de elementos de publicidad en YouTube Music
     const adSelectors = [
       '.ytmusic-player-bar.advertisement',
@@ -50,7 +52,10 @@ export class TatarAPI {
       '.ytmusic-promo',
       '.promo-container',
       'ytmusic-item-thumbnail-overlay-renderer',
-      '.ytmusic-nav-bar .button-renderer[aria-label*="Premium"]'
+      '.ytmusic-nav-bar .button-renderer[aria-label*="Premium"]',
+      '.ytmusic-setting-item-ad-attributes',
+      '.ytmusic-render-shelf-impression-tracking',
+      '.ytmusic-responsive-list-item-ad-renderer'
     ];
 
     // Observer para eliminar publicidad dinámicamente
@@ -60,7 +65,7 @@ export class TatarAPI {
         ads.forEach(ad => {
           if (ad && ad.parentNode) {
             ad.parentNode.removeChild(ad);
-            console.log('🚫 Ad blocked:', selector);
+            console.log('🚫 Ad blocked (Tatar API):', selector);
           }
         });
       });
@@ -82,6 +87,18 @@ export class TatarAPI {
         });
       });
     }, 1000);
+    
+    // Limpiar periódicamente
+    setInterval(() => {
+      adSelectors.forEach(selector => {
+        const ads = document.querySelectorAll(selector);
+        ads.forEach(ad => {
+          if (ad && ad.parentNode) {
+            ad.parentNode.removeChild(ad);
+          }
+        });
+      });
+    }, 5000);
   }
 
   // Control de reproducción
@@ -292,11 +309,59 @@ export function initializeTatarAPI() {
   if (!tatarAPI) {
     tatarAPI = new TatarAPI();
     (window as any).tatarAPI = tatarAPI;
-    console.log('🎵 Tatar API initialized with adblocker');
+    console.log('🎵 Tatar API initialized with backup adblocker');
+    
+    // Verificar si el AdBlock principal de Tauri está disponible
+    if ((window as any).AdBlock) {
+      console.log('✅ Tauri AdBlock detected, working together');
+    } else {
+      console.log('⚠️ Tauri AdBlock not detected, using backup adblocker only');
+    }
   }
   return tatarAPI;
 }
 
 export function getTatarAPI(): TatarAPI | null {
   return tatarAPI || (window as any).tatarAPI;
+}
+
+// Función para verificar el estado del AdBlock
+export async function checkAdBlockStatus(): Promise<any> {
+  if ((window as any).__TAURI__) {
+    try {
+      const status = await (window as any).__TAURI__.invoke('get_adblock_status');
+      console.log('🛡️ AdBlock Status:', status);
+      return status;
+    } catch (error) {
+      console.error('❌ Failed to get AdBlock status:', error);
+      return {
+        enabled: false,
+        error: error instanceof Error ? error.message : String(error),
+        engine_ready: false
+      };
+    }
+  } else {
+    return {
+      enabled: false,
+      error: 'Tauri API not available',
+      engine_ready: false
+    };
+  }
+}
+
+// Función para actualizar filtros manualmente
+export async function updateAdBlockFilters(): Promise<number | null> {
+  if ((window as any).__TAURI__) {
+    try {
+      const count = await (window as any).__TAURI__.invoke('update_filters');
+      console.log('🔄 AdBlock filters updated:', count);
+      return count;
+    } catch (error) {
+      console.error('❌ Failed to update AdBlock filters:', error instanceof Error ? error.message : String(error));
+      return null;
+    }
+  } else {
+    console.warn('⚠️ Tauri API not available');
+    return null;
+  }
 }

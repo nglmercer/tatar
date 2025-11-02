@@ -9,6 +9,8 @@ mod window;
 
 use tauri::Manager;
 
+const ADBLOCK_INIT_SCRIPT: &str = include_str!("adblock.js");
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -17,25 +19,32 @@ fn main() {
             minimize_window,
             toggle_maximize,
             close_window,
+            adblock_plugin::is_url_blocked,
+            adblock_plugin::is_adblock_ready,
+            adblock_plugin::get_cosmetic_filters,
+            adblock_plugin::get_cache_stats,
         ])
         .setup(|app| {
-            // DevTools en desarrollo
-            #[cfg(debug_assertions)]
-            {
-                if let Some(window) = app.get_webview_window("main") {
+            // Inject AdBlock script into main window
+            if let Some(window) = app.get_webview_window("main") {
+                #[cfg(debug_assertions)]
+                {
                     window.open_devtools();
                 }
             }
 
             // System tray
-            if let Err(e) = tray::create_tray(app) {
-                eprintln!("⚠️ Failed to create system tray: {}", e);
+            if let Err(e) = tray::create_tray(app.handle()) {
+                eprintln!("⚠️ Error creating system tray: {}", e);
             }
 
             Ok(())
         })
+        .on_page_load(|window, _event| {
+            let _ = window.eval(ADBLOCK_INIT_SCRIPT);
+        })
         .on_window_event(|window, event| {
-            window::handle_window_event(window, event);
+            window::handle_window_event(&window, event);
         })
         .on_menu_event(|app, event| {
             tray::handle_menu_event(app, event);
@@ -44,7 +53,7 @@ fn main() {
             tray::handle_tray_event(app, event);
         })
         .build(tauri::generate_context!())
-        .expect("Failed to run Tauri application")
+        .expect("Error al ejecutar la aplicación Tauri")
         .run(|app_handle, event| {
             window::handle_run_event(app_handle, &event);
         });

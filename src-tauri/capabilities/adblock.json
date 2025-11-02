@@ -1,15 +1,29 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "adblock",
-  "description": "Permissions for the AdBlock plugin",
+  "description": "Permissions for remote URLs to access Tauri API",
   "windows": ["main"],
+  "remote": {
+    "urls": [
+      "https://music.youtube.com/*",
+      "https://*.youtube.com/*",
+      "https://*.google.com/*",
+      "https://*.googlevideo.com/*"
+    ]
+  },
   "permissions": [
     "core:default",
-    "core:event:default",
     "core:window:default",
     "core:webview:default",
-    "core:app:default",
-    "core:menu:default",
-    "core:tray:default"
-  ]
+    "core:event:default",
+    "core:app:default"
+  ],
+  "command": {
+    "allow": [
+      "is_url_blocked",
+      "is_adblock_ready",
+      "get_cosmetic_filters",
+      "check_batch_urls"
+    ]
+  }
 }
