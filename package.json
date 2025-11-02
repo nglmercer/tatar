@@ -17,7 +17,9 @@
   "devDependencies": {
     "@tauri-apps/cli": "^2.1.0",
     "@vitejs/plugin-vue": "^5.1.4",
-    "vite": "^5.4.8"
+    "vite": "^5.4.8",
+    "typescript": "^5.2.2",
+    "esbuild": "^0.19.5"
   },
   "pnpm": {
     "ignoredBuiltDependencies": [
