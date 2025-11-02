@@ -49,7 +49,10 @@ jobs:
       
     - name: Check frontend build
       run: bun run build
-      
+       
+    - name: Verify dist directory exists
+      run: ls -la dist || echo "dist directory not found"
+       
     - name: Check Rust code
       working-directory: ./src-tauri
       run: cargo check
@@ -59,8 +62,12 @@ jobs:
       run: cargo test || true
       
     - name: Build Tauri app (debug)
-      uses: tauri-apps/tauri-action@v0
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        args: --debug
+      run: |
+        # Verificar que el directorio dist existe
+        ls -la dist || echo "dist directory not found"
+        
+        # Verificar que el directorio dist es accesible desde src-tauri
+        ls -la src-tauri/../dist || echo "dist directory not accessible from src-tauri"
+        
+        # Construir la aplicación Tauri manualmente usando el CLI de Tauri
+        bun run tauri build --debug --no-bundle
