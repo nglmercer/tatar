@@ -1,20 +1,26 @@
 use tauri::{
     plugin::{Builder, TauriPlugin},
-    Runtime, Manager,
+    Runtime, Manager, State, Webview,
 };
-use adblock::{Engine, FilterSet, lists::ParseOptions, request::Request};
+use adblock::{
+    Engine, FilterSet, lists::ParseOptions, request::Request,
+};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, Duration};
+use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
 
 const EASYLIST_URL: &str = "https://easylist.to/easylist/easylist.txt";
 const EASYPRIVACY_URL: &str = "https://easylist.to/easylist/easyprivacy.txt";
 const CACHE_DURATION_DAYS: u64 = 7; // Actualizar cada 7 días
 
-// Motor de AdBlock - almacenamos los filtros cargados
+// Motor de AdBlock - almacenamos el filter set y recursos
+// Usamos Arc<Mutex<>> para thread safety
 struct AdBlockEngine {
     cache_dir: PathBuf,
-    filter_set: FilterSet,
+    filter_set: Arc<Mutex<FilterSet>>,
+    resources: Arc<Mutex<HashMap<String, String>>>, // Simplificado a base64 strings
 }
 
 impl AdBlockEngine {
@@ -58,6 +64,13 @@ impl AdBlockEngine {
             // Patrones comunes
             "*/ads.js",
             "*/advertising.js",
+            
+            // Filtros cosméticos comunes
+            "##.ad-container",
+            "##.ads",
+            "##.advertisement",
+            "##.google-ad",
+            "##.adsbygoogle",
         ];
 
         let mut total_filters = 0;
@@ -87,35 +100,138 @@ impl AdBlockEngine {
             }
         }
         
+        // Inicializar recursos para reemplazo
+        let mut resources = HashMap::new();
+        
+        // Agregar recursos básicos
+        resources.insert(
+            "1x1-transparent.gif".to_string(),
+            "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7".to_string(), // base64 de 1x1 transparent gif
+        );
+        
         println!("✅ AdBlock Engine initialized with {} total filters", total_filters);
 
         Self {
             cache_dir,
-            filter_set,
+            filter_set: Arc::new(Mutex::new(filter_set)),
+            resources: Arc::new(Mutex::new(resources)),
         }
     }
 
     fn should_block(&self, url: &str, source_url: &str, request_type: &str) -> bool {
-        // Crear una nueva instancia del Engine para esta solicitud
-        // Esto evita problemas de thread safety
-        let engine = Engine::from_filter_set(self.filter_set.clone(), true);
-        
-        // Crear la request para el engine
-        let request = Request::new(
-            url,
-            source_url,
-            request_type,
-        ).unwrap_or_else(|_| {
-            Request::new(url, "", "other").unwrap()
-        });
+        // Usar Mutex para thread safety
+        if let Ok(filter_set) = self.filter_set.lock() {
+            // Crear engine temporal para esta solicitud
+            let engine = Engine::from_filter_set(filter_set.clone(), true);
+            
+            // Crear la request para el engine
+            let request = Request::new(
+                url,
+                source_url,
+                request_type,
+            ).unwrap_or_else(|_| {
+                Request::new(url, "", "other").unwrap()
+            });
 
-        let result = engine.check_network_request(&request);
-        
-        if result.matched {
-            println!("🚫 Blocked: {} (type: {}, source: {})", url, request_type, source_url);
-            true
+            let result = engine.check_network_request(&request);
+            
+            if result.matched {
+                println!("🚫 Blocked: {} (type: {}, source: {})", url, request_type, source_url);
+                true
+            } else {
+                false
+            }
         } else {
+            eprintln!("❌ Failed to acquire lock on filter set");
             false
+        }
+    }
+    
+    fn get_cosmetic_filters(&self, url: &str) -> Vec<String> {
+        if let Ok(filter_set) = self.filter_set.lock() {
+            // Crear engine temporal para esta solicitud
+            let engine = Engine::from_filter_set(filter_set.clone(), true);
+            
+            // Obtener filtros cosméticos para la URL
+            let cosmetic_resources = engine.url_cosmetic_resources(url);
+            
+            // Extraer los selectores CSS
+            let mut selectors = Vec::new();
+            
+            // Agregar selectores de hide rules
+            for filter in &cosmetic_resources.hide_selectors {
+                selectors.push(filter.clone());
+            }
+            
+            // Agregar selectores de generic hide
+            if cosmetic_resources.generichide {
+                selectors.push("html > body".to_string());
+            }
+            
+            selectors
+        } else {
+            eprintln!("❌ Failed to acquire lock on filter set for cosmetic filters");
+            Vec::new()
+        }
+    }
+    
+    fn get_resource_replacement(&self, url: &str) -> Option<String> {
+        if let Ok(resources) = self.resources.lock() {
+            // Extraer el nombre del recurso de la URL
+            if let Some(resource_name) = url.split('/').last() {
+                resources.get(resource_name).cloned()
+            } else {
+                None
+            }
+        } else {
+            eprintln!("❌ Failed to acquire lock on resources");
+            None
+        }
+    }
+    
+    fn update_filters(&self) -> Result<usize, String> {
+        println!("🔄 Updating AdBlock filters...");
+        
+        // Forzar la descarga de nuevas listas
+        let easylist = Self::load_filter_list(
+            &self.cache_dir,
+            "easylist.txt",
+            EASYLIST_URL
+        );
+        
+        let easyprivacy = Self::load_filter_list(
+            &self.cache_dir,
+            "easyprivacy.txt",
+            EASYPRIVACY_URL
+        );
+        
+        if let Ok(mut filter_set) = self.filter_set.lock() {
+            let mut total_filters = 0;
+            
+            // Crear nuevo filter set
+            let mut new_filter_set = FilterSet::new(false);
+            
+            // Agregar EasyList
+            if let Some(content) = easylist {
+                let count = Self::add_filters_from_content(&mut new_filter_set, &content);
+                println!("✅ Updated {} filters from EasyList", count);
+                total_filters += count;
+            }
+            
+            // Agregar EasyPrivacy
+            if let Some(content) = easyprivacy {
+                let count = Self::add_filters_from_content(&mut new_filter_set, &content);
+                println!("✅ Updated {} filters from EasyPrivacy", count);
+                total_filters += count;
+            }
+            
+            // Reemplazar el filter set
+            *filter_set = new_filter_set;
+            
+            println!("✅ AdBlock Engine updated with {} total filters", total_filters);
+            Ok(total_filters)
+        } else {
+            Err("Failed to acquire lock on filter set".to_string())
         }
     }
 
@@ -223,135 +339,203 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             // Inicializar el motor de AdBlock
             let adblock = AdBlockEngine::new(cache_dir);
             app.manage(adblock);
+            
             Ok(())
         })
         .on_webview_ready(|window| {
-            println!("🌐 WebView ready, injecting AdBlock interceptor...");
+            println!("🌐 WebView ready, setting up AdBlock...");
             
-            // Inyectar script que reporta las peticiones a Rust
-            let script = r#"
-            (function() {
-                console.log('🛡️ AdBlock interceptor active');
-                
-                // Función helper para invocar comandos de Tauri
-                async function invokeCommand(command, args) {
-                    if (window.__TAURI__ && window.__TAURI__.core) {
-                        return await window.__TAURI__.core.invoke(command, args);
-                    } else if (window.__TAURI__ && window.__TAURI__.invoke) {
-                        return await window.__TAURI__.invoke(command, args);
-                    } else {
-                        console.warn('Tauri API not available');
-                        return false;
-                    }
-                }
-                
-                // Interceptar fetch
+            // Inyectar script para AdBlock
+            if let Err(e) = setup_adblock_injection(&window) {
+                eprintln!("⚠️ Failed to inject AdBlock script: {}", e);
+            }
+        })
+        .on_navigation(|window, url| {
+            println!("🔗 Navigation to: {}", url);
+            
+            // Aplicar filtros cosméticos para la nueva página
+            if let Err(e) = apply_cosmetic_filters(&window, &url.to_string()) {
+                eprintln!("⚠️ Failed to apply cosmetic filters: {}", e);
+            }
+            
+            true // Permitir navegación
+        })
+        .invoke_handler(tauri::generate_handler![
+            check_adblock,
+            get_cosmetic_filters,
+            update_filters,
+            get_resource_replacement
+        ])
+        .build()
+}
+
+fn setup_adblock_injection<R: Runtime>(window: &Webview<R>) -> Result<(), Box<dyn std::error::Error>> {
+    let script = r#"
+    (function() {
+        console.log('🛡️ AdBlock injection started');
+        
+        // Crear objeto global para AdBlock
+        window.AdBlock = {
+            enabled: true,
+            
+            // Interceptar fetch/XHR requests
+            interceptRequests: function() {
                 const originalFetch = window.fetch;
-                window.fetch = async function(...args) {
-                    const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
-                    const sourceUrl = window.location.href;
+                const originalXHROpen = XMLHttpRequest.prototype.open;
+                
+                // Intercept fetch
+                window.fetch = function(...args) {
+                    const url = args[0];
+                    const options = args[1] || {};
                     
-                    try {
-                        // Llamar al backend de Rust para verificar si debe bloquearse
-                        const shouldBlock = await invokeCommand('plugin:adblock|check_adblock', {
-                            url: url.toString(),
-                            sourceUrl: sourceUrl,
-                            requestType: 'xmlhttprequest'
+                    // Verificar si la URL debe ser bloqueada
+                    if (window.__TAURI__) {
+                        window.__TAURI__.invoke('check_adblock', {
+                            url: typeof url === 'string' ? url : url.url,
+                            sourceUrl: window.location.href,
+                            requestType: options.method || 'GET'
+                        }).then(blocked => {
+                            if (blocked) {
+                                console.log('🚫 Blocked request:', url);
+                                return Promise.reject(new Error('Request blocked by AdBlock'));
+                            }
+                        }).catch(() => {
+                            // Continuar si hay error en la verificación
                         });
-                        
-                        if (shouldBlock) {
-                            console.log('🚫 Fetch blocked:', url);
-                            return Promise.reject(new Error('Blocked by AdBlock'));
-                        }
-                    } catch (e) {
-                        console.error('AdBlock check error:', e);
                     }
                     
                     return originalFetch.apply(this, args);
                 };
-
-                // Interceptar XMLHttpRequest
-                const OriginalXHR = XMLHttpRequest;
-                window.XMLHttpRequest = function() {
-                    const xhr = new OriginalXHR();
-                    const originalOpen = xhr.open;
+                
+                // Intercept XMLHttpRequest
+                XMLHttpRequest.prototype.open = function(method, url, ...args) {
+                    this._url = url;
+                    this._method = method;
                     
-                    xhr.open = async function(method, url, ...rest) {
-                        this._url = url;
-                        const sourceUrl = window.location.href;
-                        
-                        try {
-                            const shouldBlock = await invokeCommand('plugin:adblock|check_adblock', {
-                                url: url.toString(),
-                                sourceUrl: sourceUrl,
-                                requestType: 'xmlhttprequest'
-                            });
-                            
-                            if (shouldBlock) {
-                                console.log('🚫 XHR blocked:', url);
+                    if (window.__TAURI__) {
+                        window.__TAURI__.invoke('check_adblock', {
+                            url: url,
+                            sourceUrl: window.location.href,
+                            requestType: method
+                        }).then(blocked => {
+                            if (blocked) {
+                                console.log('🚫 Blocked XHR:', url);
                                 this.abort();
-                                return;
                             }
-                        } catch (e) {
-                            console.error('AdBlock check error:', e);
-                        }
-                        
-                        return originalOpen.call(this, method, url, ...rest);
-                    };
-                    
-                    return xhr;
-                };
-
-                // Observar elementos dinámicos (scripts, iframes, imágenes)
-                const observer = new MutationObserver((mutations) => {
-                    mutations.forEach((mutation) => {
-                        mutation.addedNodes.forEach(async (node) => {
-                            if (node.tagName && node.src) {
-                                const sourceUrl = window.location.href;
-                                let requestType = 'other';
-                                
-                                if (node.tagName === 'SCRIPT') requestType = 'script';
-                                else if (node.tagName === 'IFRAME') requestType = 'subdocument';
-                                else if (node.tagName === 'IMG') requestType = 'image';
-                                
-                                try {
-                                    const shouldBlock = await invokeCommand('plugin:adblock|check_adblock', {
-                                        url: node.src,
-                                        sourceUrl: sourceUrl,
-                                        requestType: requestType
-                                    });
-                                    
-                                    if (shouldBlock) {
-                                        console.log('🚫 Blocked element:', node.tagName, node.src);
-                                        node.remove();
-                                    }
-                                } catch (e) {
-                                    console.error('AdBlock check error:', e);
-                                }
-                            }
+                        }).catch(() => {
+                            // Continuar si hay error en la verificación
                         });
-                    });
+                    }
+                    
+                    return originalXHROpen.apply(this, [method, url, ...args]);
+                };
+                
+                console.log('✅ Request interception enabled');
+            },
+            
+            // Aplicar filtros cosméticos
+            applyCosmeticFilters: function(selectors) {
+                if (!Array.isArray(selectors) || selectors.length === 0) {
+                    return;
+                }
+                
+                console.log('🎨 Applying cosmetic filters:', selectors.length);
+                
+                // Crear o actualizar stylesheet
+                let style = document.getElementById('adblock-styles');
+                if (!style) {
+                    style = document.createElement('style');
+                    style.id = 'adblock-styles';
+                    document.head.appendChild(style);
+                }
+                
+                // Agregar nuevos selectores
+                const css = selectors.map(selector => `${selector} { display: none !important; }`).join('\n');
+                style.textContent += css;
+                
+                // Ocultar elementos existentes
+                selectors.forEach(selector => {
+                    try {
+                        const elements = document.querySelectorAll(selector);
+                        elements.forEach(el => {
+                            el.style.display = 'none';
+                            el.setAttribute('data-adblocked', 'true');
+                        });
+                    } catch (e) {
+                        console.warn('Invalid selector:', selector, e);
+                    }
                 });
-
-                observer.observe(document.documentElement, {
+                
+                console.log('✅ Cosmetic filters applied');
+            },
+            
+            // Inicializar
+            init: function() {
+                this.interceptRequests();
+                
+                // Obtener filtros cosméticos para la página actual
+                if (window.__TAURI__) {
+                    window.__TAURI__.invoke('get_cosmetic_filters', {
+                        url: window.location.href
+                    }).then(selectors => {
+                        this.applyCosmeticFilters(selectors);
+                    }).catch(e => {
+                        console.warn('Failed to get cosmetic filters:', e);
+                    });
+                }
+                
+                // Observar cambios en el DOM
+                const observer = new MutationObserver(() => {
+                    if (window.__TAURI__) {
+                        window.__TAURI__.invoke('get_cosmetic_filters', {
+                            url: window.location.href
+                        }).then(selectors => {
+                            this.applyCosmeticFilters(selectors);
+                        }).catch(() => {});
+                    }
+                });
+                
+                observer.observe(document.body, {
                     childList: true,
                     subtree: true
                 });
-
-                console.log('✅ AdBlock interceptor initialized');
-            })();
-            "#;
-
-            if let Err(e) = window.eval(script) {
-                eprintln!("⚠️ Failed to inject AdBlock script: {}", e);
             }
-        })
-        .on_navigation(|_window, url| {
-            println!("🔗 Navigation to: {}", url);
-            true // Permitir navegación
-        })
-        .invoke_handler(tauri::generate_handler![check_adblock])
-        .build()
+        };
+        
+        // Inicializar cuando el DOM esté listo
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => window.AdBlock.init());
+        } else {
+            window.AdBlock.init();
+        }
+        
+        console.log('✅ AdBlock injection completed');
+    })();
+    "#;
+
+    window.eval(script)?;
+    Ok(())
+}
+
+fn apply_cosmetic_filters<R: Runtime>(window: &Webview<R>, url: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let script = format!(r#"
+    (function() {{
+        console.log('🎨 Applying cosmetic filters for:', {});
+        
+        if (window.AdBlock && window.__TAURI__) {{
+            window.__TAURI__.invoke('get_cosmetic_filters', {{
+                url: {}
+            }}).then(selectors => {{
+                window.AdBlock.applyCosmeticFilters(selectors);
+            }}).catch(e => {{
+                console.warn('Failed to get cosmetic filters:', e);
+            }});
+        }}
+    }})();
+    "#, serde_json::json!(url), serde_json::json!(url));
+
+    window.eval(&script)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -359,7 +543,30 @@ async fn check_adblock(
     url: String,
     source_url: String,
     request_type: String,
-    state: tauri::State<'_, AdBlockEngine>,
+    state: State<'_, AdBlockEngine>,
 ) -> Result<bool, String> {
     Ok(state.should_block(&url, &source_url, &request_type))
+}
+
+#[tauri::command]
+async fn get_cosmetic_filters(
+    url: String,
+    state: State<'_, AdBlockEngine>,
+) -> Result<Vec<String>, String> {
+    Ok(state.get_cosmetic_filters(&url))
+}
+
+#[tauri::command]
+async fn update_filters(
+    state: State<'_, AdBlockEngine>,
+) -> Result<usize, String> {
+    state.update_filters()
+}
+
+#[tauri::command]
+async fn get_resource_replacement(
+    url: String,
+    state: State<'_, AdBlockEngine>,
+) -> Result<Option<String>, String> {
+    Ok(state.get_resource_replacement(&url))
 }

@@ -11,6 +11,7 @@ use tauri::Manager;
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
         .plugin(adblock_plugin::init())
         .invoke_handler(tauri::generate_handler![
             minimize_window,
