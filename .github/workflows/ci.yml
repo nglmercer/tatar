@@ -51,6 +51,7 @@ jobs:
       run: bun run build
        
     - name: Verify dist directory exists
+      shell: bash
       run: ls -la dist || echo "dist directory not found"
        
     - name: Check Rust code
@@ -62,6 +63,7 @@ jobs:
       run: cargo test || true
       
     - name: Build Tauri app (debug)
+      shell: bash
       run: |
         # Verificar que el directorio dist existe
         ls -la dist || echo "dist directory not found"
