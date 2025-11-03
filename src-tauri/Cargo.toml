@@ -19,7 +19,7 @@ tauri-plugin-shell = "2.1.0"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.0", features = ["v4"] }
 url = "2.5.2"
-adblock = "0.11.0"
+adblock = { version = "0.11.0", default-features = false, features = ["embedded-domain-resolver", "full-regex-handling"] }
 ureq = { version = "2.10", features = ["json"] }
 tokio = { version = "1.0", features = ["full"] }
 lazy_static = "1.4"

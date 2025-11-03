@@ -2,8 +2,8 @@ use adblock::{lists::ParseOptions, request::Request, Engine};
 use std::fs;  
 use std::path::PathBuf;  
 use std::sync::{Arc, Mutex};  
-use std::collections::HashSet;  
-use std::time::{SystemTime, UNIX_EPOCH};  
+use std::collections::HashSet;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{  
     plugin::{Builder, TauriPlugin},  
     AppHandle, Manager,  
@@ -23,17 +23,18 @@ const FILTER_LISTS: &[(&str, &str)] = &[
   
 const WHITELIST_DOMAINS: &[&str] = &[];  
   
-// ✅ Eliminado el campo cosmetic_filters innecesario  
-#[derive(Clone)]  
-pub struct AdBlockState {  
+#[derive(Clone)]    
+pub struct AdBlockState {    
     engine: Arc<Mutex<Option<Engine>>>,  
-}  
+    cosmetic_filters: Arc<Mutex<Vec<String>>>, 
+}
   
 impl AdBlockState {  
-    fn new() -> Self {  
-        Self {  
+    fn new() -> Self {    
+        Self {    
             engine: Arc::new(Mutex::new(None)),  
-        }  
+            cosmetic_filters: Arc::new(Mutex::new(Vec::new())),  
+        }    
     }  
   
     fn set_engine(&self, engine: Engine) {  
@@ -42,6 +43,7 @@ impl AdBlockState {
     }  
   
     fn check_url(&self, url: &str, source_url: &str, request_type: &str) -> bool {  
+        // Validaciones rápidas primero  
         if Self::is_whitelisted(url)  
             || url.starts_with("data:")  
             || url.starts_with("blob:")  
@@ -52,6 +54,7 @@ impl AdBlockState {
   
         let lock = self.engine.lock().unwrap();  
         if let Some(engine) = lock.as_ref() {  
+            // Normalización de tipo de solicitud compatible con adblock-rust  
             let normalized_type = match request_type {  
                 "fetch" | "xhr" => "xmlhttprequest",  
                 "link" => "stylesheet",  
@@ -75,24 +78,23 @@ impl AdBlockState {
         WHITELIST_DOMAINS.iter().any(|domain| url.contains(domain))  
     }  
   
-    // ✅ Ahora acepta URL completa en lugar de hostname  
-    fn get_cosmetic_resources(&self, url: &str) -> serde_json::Value {  
+    fn get_cosmetic_resources(&self, hostname: &str) -> serde_json::Value {  
         use adblock::cosmetic_filter_cache::UrlSpecificResources;  
-  
+          
         let lock = self.engine.lock().unwrap();  
   
         let resources = if let Some(engine) = lock.as_ref() {  
-            engine.url_cosmetic_resources(url)  
+            engine.url_cosmetic_resources(hostname)  
         } else {  
             UrlSpecificResources::empty()  
         };  
   
+        // Retornar estructura separada para uso correcto en frontend  
         serde_json::json!({  
-            "hide_selectors": resources.hide_selectors.into_iter().collect::<Vec<_>>(),  
-            "exceptions": resources.exceptions.into_iter().collect::<Vec<_>>(),  
+            "hide_selectors": resources.hide_selectors,  
+            "style_selectors": resources.exceptions,  
             "injected_script": resources.injected_script,  
-            "procedural_actions": resources.procedural_actions.into_iter().collect::<Vec<_>>(),  
-            "generichide": resources.generichide,  
+            "procedural_actions": resources.procedural_actions,  
         })  
     }  
   
@@ -124,7 +126,7 @@ pub fn init() -> TauriPlugin<tauri::Wry> {
             is_adblock_ready,  
             get_cosmetic_resources,  
             check_batch_urls,  
-            get_hidden_class_id_selectors,  
+            get_hidden_class_id_selectors,
         ])  
         .build()  
 }  
@@ -136,8 +138,9 @@ async fn setup_filters(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>
     fs::create_dir_all(&cache_dir)?;  
   
     let engine_cache_path = cache_dir.join("engine.dat");  
-    let cache_duration = 24 * 60 * 60;  
+    let cache_duration = 24 * 60 * 60; // 24 hours in seconds  
   
+    // Intentar cargar el engine desde caché primero  
     if let Ok(cached_engine) = load_engine_from_cache(&engine_cache_path, cache_duration) {  
         println!("🚀 AdBlock: Loaded engine from cache");  
         let state: tauri::State<AdBlockState> = app.state();  
@@ -190,6 +193,7 @@ async fn setup_filters(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>
         all_content.push('\n');  
     }  
   
+    // Usar Engine::from_rules directamente  
     let engine = Engine::from_rules(  
         all_content  
             .lines()  
@@ -198,7 +202,6 @@ async fn setup_filters(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>
         ParseOptions::default(),  
     );  
   
-    // ✅ Manejo correcto de errores en serialización  
     if let Err(e) = save_engine_to_cache(&engine, &engine_cache_path) {  
         eprintln!("⚠️ Could not save engine cache: {}", e);  
     } else {  
@@ -216,7 +219,7 @@ fn save_engine_to_cache(
     engine: &Engine,  
     cache_path: &PathBuf,  
 ) -> Result<(), Box<dyn std::error::Error>> {  
-    let serialized = engine.serialize();  
+    let serialized = engine.serialize(); 
     fs::write(cache_path, serialized)?;  
     Ok(())  
 }  
@@ -309,28 +312,25 @@ pub async fn is_adblock_ready(state: tauri::State<'_, AdBlockState>) -> Result<b
     Ok(state.is_ready())  
 }  
   
-// ✅ Ahora acepta URL completa  
-#[tauri::command]  
-pub async fn get_cosmetic_resources(  
-    url: String,  
-    state: tauri::State<'_, AdBlockState>,  
-) -> Result<serde_json::Value, String> {  
-    Ok(state.get_cosmetic_resources(&url))  
-}  
-  
-// ✅ Ahora recibe exceptions desde el frontend  
-#[tauri::command]  
-pub async fn get_hidden_class_id_selectors(  
-    classes: Vec<String>,  
+#[tauri::command]    
+pub async fn get_cosmetic_resources(    
+    url: String, // Cambiar de hostname a url completa  
+    state: tauri::State<'_, AdBlockState>,    
+) -> Result<serde_json::Value, String> {    
+    Ok(state.get_cosmetic_resources(&url))    
+}
+#[tauri::command]    
+pub async fn get_hidden_class_id_selectors(    
+    classes: Vec<String>,    
     ids: Vec<String>,  
-    exceptions: HashSet<String>,  
-    state: tauri::State<'_, AdBlockState>,  
-) -> Result<Vec<String>, String> {  
-    let lock = state.engine.lock().unwrap();  
-  
-    if let Some(engine) = lock.as_ref() {  
+    exceptions: HashSet<String>, // Pasar desde el frontend  
+    state: tauri::State<'_, AdBlockState>,    
+) -> Result<Vec<String>, String> {    
+    let lock = state.engine.lock().unwrap();    
+        
+    if let Some(engine) = lock.as_ref() {    
         Ok(engine.hidden_class_id_selectors(classes, ids, &exceptions))  
-    } else {  
-        Ok(Vec::new())  
-    }  
+    } else {    
+        Ok(Vec::new())    
+    }    
 }

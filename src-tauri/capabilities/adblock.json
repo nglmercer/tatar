@@ -22,8 +22,9 @@
     "allow": [
       "is_url_blocked",
       "is_adblock_ready",
-      "get_cosmetic_filters",
-      "check_batch_urls"
+      "get_cosmetic_resources",
+      "check_batch_urls",
+      "get_hidden_class_id_selectors"
     ]
   }
 }

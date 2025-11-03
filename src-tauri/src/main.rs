@@ -21,8 +21,9 @@ fn main() {
             close_window,
             adblock_plugin::is_url_blocked,
             adblock_plugin::is_adblock_ready,
-            adblock_plugin::get_cosmetic_filters,
-            adblock_plugin::get_cache_stats,
+            adblock_plugin::get_hidden_class_id_selectors,
+            adblock_plugin::check_batch_urls,
+            adblock_plugin::get_cosmetic_resources,
         ])
         .setup(|app| {
             // Inject AdBlock script into main window
