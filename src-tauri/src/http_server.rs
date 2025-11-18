@@ -1,7 +1,7 @@
 use crate::bridge::AppState;
 use axum::{
     extract::State,
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use std::net::SocketAddr;
@@ -16,7 +16,15 @@ async fn get_full_state(State(state): State<Arc<AppState>>) -> Json<serde_json::
 async fn get_song(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     Json(state.get_song_info())
 }
+async fn send_player_command(
+    State(state): State<Arc<AppState>>, 
+    Json(cmd): Json<serde_json::Value> 
+) -> Json<serde_json::Value> {
+    
+    state.emit_to_frontend("ytm:command", cmd);
 
+    Json(serde_json::json!({ "status": "ok", "message": "Command sent" }))
+}
 pub async fn start_server(port: u16, app_state: Arc<AppState>) -> Result<String, String> {
     {
         let shutdown_guard = app_state.http_server_shutdown.lock().unwrap();
@@ -27,6 +35,7 @@ pub async fn start_server(port: u16, app_state: Arc<AppState>) -> Result<String,
     let app = Router::new()
         .route("/", get(get_full_state))
         .route("/song", get(get_song))
+        .route("/command", post(send_player_command))
         .layer(CorsLayer::permissive())
         .with_state(app_state.clone());
 

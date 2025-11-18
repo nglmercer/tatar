@@ -1,6 +1,6 @@
 use tauri::{AppHandle, Emitter, Runtime};
 use serde_json::Value;
-use std::sync::{Mutex, Arc}; // <--- IMPORTA ARC
+use std::sync::{Mutex, Arc};
 use tokio::sync::oneshot;
 
 pub struct AppState {
@@ -8,6 +8,7 @@ pub struct AppState {
     last_queue: Mutex<Value>,
     last_player_state: Mutex<Value>,
     pub http_server_shutdown: Mutex<Option<oneshot::Sender<()>>>,
+    pub app_handle: Mutex<Option<AppHandle>>,
 }
 
 impl Default for AppState {
@@ -17,6 +18,7 @@ impl Default for AppState {
             last_queue: Mutex::new(Value::Null),
             last_player_state: Mutex::new(Value::Null),
             http_server_shutdown: Mutex::new(None),
+            app_handle: Mutex::new(None),
         }
     }
 }
@@ -41,17 +43,27 @@ impl AppState {
             "playerState": self.get_player_state()
         })
     }
+    pub fn emit_to_frontend(&self, event: &str, payload: Value) {
+        let handle_guard = self.app_handle.lock().unwrap();
+        if let Some(handle) = handle_guard.as_ref() {
+            if let Err(e) = handle.emit(event, payload) {
+                eprintln!("❌ Error emitiendo evento {}: {}", event, e);
+            } else {
+                println!("📡 Evento emitido a Tauri: {}", event);
+            }
+        } else {
+            eprintln!("⚠️ No se pudo emitir: AppHandle no inicializado");
+        }
+    }
 }
 
 #[tauri::command]
 pub fn push_telemetry<R: Runtime>(
     app: AppHandle<R>, 
-    // CORRECCIÓN: El estado ahora es Arc<AppState>, no AppState directo
     state: tauri::State<'_, Arc<AppState>>, 
     topic: String, 
     payload: Value
 ) {
-    // Gracias a Deref, podemos usar state.lock() directamente aunque sea un Arc
     match topic.as_str() {
         "song-info" => *state.last_song_info.lock().unwrap() = payload.clone(),
         "queue" => *state.last_queue.lock().unwrap() = payload.clone(),

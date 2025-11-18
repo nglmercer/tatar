@@ -35,9 +35,13 @@ fn main() {
             debug_get_current_state,
             cmd_toggle_server,
         ])
-        .setup(|app| {
-            setup_main_window(app)?;
-            setup_tray(&app.handle())?;
+        .setup(move |app| {
+            let handle = app.handle();
+            let state = handle.state::<Arc<bridge::AppState>>();
+            *state.app_handle.lock().unwrap() = Some(handle.clone());
+
+            setup_main_window(app)?;    
+            setup_tray(app.handle())?;
             Ok(())
         })
         .on_page_load(|window, _| {
@@ -126,11 +130,9 @@ async fn cmd_toggle_server(
 
     if is_running {
         http_server::stop_server(&state)
+    } else if let Some(p) = port {
+        http_server::start_server(p, state.inner().clone()).await
     } else {
-        if let Some(p) = port {
-            http_server::start_server(p, state.inner().clone()).await
-        } else {
-            Err("Server stopped (no valid port provided).".to_string())
-        }
+        Err("Server stopped (no valid port provided).".to_string())
     }
 }

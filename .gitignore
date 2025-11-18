@@ -28,3 +28,4 @@ flake.lock
 .yarn/unplugged
 .yarn/build-state.yml
 *.lock
+package-lock.json
