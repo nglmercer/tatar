@@ -70,7 +70,7 @@ fn main() {
             .downcast_ref::<&str>()
             .unwrap_or(&"Unknown panic");
         let location = info.location().map(|l| l.to_string()).unwrap_or_default();
-        eprintln!("🔥 CRITICAL RUST PANIC: {} at {}", msg, location);
+        eprintln!("RUST PANIC: {} at {}", msg, location);
         // Opcional: Escribir a un archivo de texto panic.log
         use std::io::Write;
         if let Ok(mut file) = std::fs::File::create("panic-crash.log") {
