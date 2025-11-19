@@ -16,11 +16,6 @@ use tauri::{AppHandle, Manager};
 
 const MAIN_WINDOW_LABEL: &str = "main";
 
-#[tauri::command]
-fn debug_get_current_state(state: tauri::State<'_, bridge::AppState>) -> serde_json::Value {
-    println!("🦀 Rust API: Reading state snapshot...");
-    state.get_full_snapshot()
-}
 fn main() {
     let app_state = Arc::new(bridge::AppState::default());
     tauri::Builder::default()
@@ -32,16 +27,25 @@ fn main() {
             window_commands::toggle_maximize,
             window_commands::close,
             bridge::push_telemetry,
-            debug_get_current_state,
+            bridge::resolve_request,
             cmd_toggle_server,
         ])
         .setup(move |app| {
-            let handle = app.handle();
-            let state = handle.state::<Arc<bridge::AppState>>();
-            *state.app_handle.lock().unwrap() = Some(handle.clone());
+            let handle = app.handle().clone();
+
+            let state_wrapper = handle.state::<Arc<bridge::AppState>>();
+
+            let state_arc = state_wrapper.inner().clone();
+
+            let handle_for_async = handle.clone();
+            let state_for_async = state_arc.clone();
+
+            tauri::async_runtime::spawn(async move {
+                *state_for_async.app_handle.lock().await = Some(handle_for_async);
+            });
 
             setup_main_window(app)?;
-            setup_tray(app.handle())?;
+            setup_tray(&handle)?;
             Ok(())
         })
         .on_page_load(|window, _| {
@@ -129,10 +133,12 @@ async fn cmd_toggle_server(
     state: tauri::State<'_, Arc<bridge::AppState>>,
     port: Option<u16>,
 ) -> Result<String, String> {
-    let is_running = state.http_server_shutdown.lock().unwrap().is_some();
+    // FIX 4: Use .lock().await (no unwrap)
+    let is_running = state.http_server_shutdown.lock().await.is_some();
 
     if is_running {
-        http_server::stop_server(&state)
+        // FIX 5: Add .await because stop_server is async
+        http_server::stop_server(&state).await
     } else if let Some(p) = port {
         http_server::start_server(p, state.inner().clone()).await
     } else {

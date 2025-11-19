@@ -20,7 +20,8 @@
   ],
   "command": {
     "allow": [
-      "push_telemetry"
+      "push_telemetry",
+      "resolve_request"
     ]
   }
 }

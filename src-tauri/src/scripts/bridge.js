@@ -28,44 +28,137 @@ window.addEventListener("message", (event) => {
     }
     sendTelemetry(msg.event, msg.payload);
 });
-// src-tauri/src/scripts/providers/controller.js (o el archivo correspondiente)
-
 (function() {
-    // Asegurarse de que estamos en el contexto de Tauri
-    if (window.__TAURI__) {
-        const { listen } = window.__TAURI__.event;
-        console.log("🎧 Listening for External Commands...");
-        // Escuchamos el evento que definimos en Rust ("ytm:command")
-        listen('ytm:command', (event) => {
-            const command = event.payload;
-            console.log("📨 Received Command:", command);
+    // Verificar contexto Tauri
+    if (!window.__TAURI__) return;
 
-            handleCommand(command);
-        });
-    }
+    const { listen } = window.__TAURI__.event;
+    const { invoke } = window.__TAURI__.core;
+    console.log("🎧 YTM Controller: Listening for Rust commands...");
 
-    function handleCommand(data) {
-        switch (data.action) {
-            case 'play':
-                window.YTM.Player.play();
-                break;
-            case 'pause':
-                window.YTM.Player.pause();
-                break;
-            case 'playPause':
-                window.YTM.Player.playPause();
-                break;
-            case 'next':
-                window.YTM.Player.next();
-                break;
-            case 'previous':
-                window.YTM.Player.previous();
-                break;
-            case 'seek':
-                // data.value en segundos
-                if (typeof data.value === 'number') window.YTM.Player.seekTo(data.value);
-                break;
-            // ... otros comandos
+    listen('ytm:command', (event) => {
+        const cmd = event.payload;
+        console.log("📨 Command received:", cmd);
+        
+        if (!cmd || !cmd.action) return;
+
+        try {
+            switch (cmd.action) {
+                // --- Player Controls ---
+                case 'play':
+                    window.YTM.Player.play();
+                    break;
+                case 'pause':
+                    window.YTM.Player.pause();
+                    break;
+                case 'playPause':
+                    window.YTM.Player.playPause();
+                    break;
+                case 'next':
+                    window.YTM.Player.next();
+                    break;
+                case 'previous':
+                    window.YTM.Player.previous();
+                    break;
+                
+                // --- Time / Seek ---
+                case 'seek':
+                    // cmd.value es segundos
+                    window.YTM.Player.seekTo(cmd.value);
+                    break;
+                case 'goBack':
+                    window.YTM.Player.goBack(cmd.value || 10);
+                    break;
+                case 'goForward':
+                    window.YTM.Player.goForward(cmd.value || 10);
+                    break;
+
+                // --- Volume ---
+                case 'setVolume':
+                    window.YTM.Player.setVolume(cmd.value);
+                    break;
+                case 'toggleMute':
+                    window.YTM.Player.toggleMute();
+                    break;
+
+                // --- Feedback ---
+                case 'like':
+                    window.YTM.Player.like();
+                    break;
+                case 'dislike':
+                    window.YTM.Player.dislike();
+                    break;
+
+                // --- Queue Management ---
+                case 'addToQueue':
+                    // Requiere videoId y opcionalmente insertPosition
+                    if (cmd.videoId && window.YTM.Queue) {
+                        window.YTM.Queue.addToQueue(cmd.videoId, cmd.insertPosition);
+                    }
+                    break;
+                case 'clearQueue':
+                    if (window.YTM.Queue) window.YTM.Queue.clearQueue();
+                    break;
+                case 'removeFromQueue':
+                    if (window.YTM.Queue) window.YTM.Queue.removeFromQueue(cmd.value);
+                    break;
+                case 'setQueueIndex':
+                    if (window.YTM.Queue) window.YTM.Queue.setIndex(cmd.value);
+                    break;
+
+                // --- Search / Navigation ---
+                case 'search':
+                    if (cmd.query) {
+                        // Navegamos a la URL de búsqueda
+                        const searchUrl = `/search?q=${encodeURIComponent(cmd.query)}`;
+                        const currentUrl = window.location.pathname + window.location.search;
+                        
+                        if (currentUrl !== searchUrl) {
+                           // Usamos el router de YTM si es posible, o location.href
+                           const app = document.querySelector('ytmusic-app');
+                           if (app && app.navigate_) {
+                               app.navigate_(searchUrl);
+                           } else {
+                               window.location.href = searchUrl;
+                           }
+                        }
+                    }
+                    break;
+
+                default:
+                    console.warn("⚠️ Unknown command action:", cmd.action);
+            }
+        } catch (e) {
+            console.error("❌ Error executing command:", cmd, e);
         }
-    }
+    });
+    listen('ytm:request', async (event) => {
+        const { request_id, topic } = event.payload;
+        let responseData = null;
+        try {
+            switch (topic) {
+                case 'get-song-info':
+                    responseData = await window.YTM?.Info?.get() || null;
+                    break;
+                
+                case 'get-queue':
+                    responseData = await window.YTM?.Queue?.getQueueData() || null;
+                    break;
+
+                case 'get-volume':
+                    responseData = await window.YTM?.State?.getVolumeState() || null;
+                    break;
+
+                default:
+                    responseData = { error: "Unknown topic" };
+            }
+        } catch (e) {
+            responseData = { error: e.message };
+        }
+        console.log("responseData", responseData);
+        invoke('resolve_request', { 
+            requestId: request_id,
+            data: responseData 
+        }).catch(err => console.error("Error resolving request:", err));
+    });
 })();
